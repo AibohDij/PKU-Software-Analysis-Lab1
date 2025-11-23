@@ -1,11 +1,14 @@
 package pku;
 
 import java.util.HashMap;
+import java.util.Set;
 
 import pascal.taie.ir.IR;
 import pascal.taie.ir.exp.IntLiteral;
 import pascal.taie.ir.exp.InvokeStatic;
 import pascal.taie.ir.exp.Var;
+import pascal.taie.ir.exp.LValue;
+import pascal.taie.ir.exp.RValue;
 import pascal.taie.ir.stmt.Invoke;
 import pascal.taie.ir.stmt.New;
 
@@ -16,9 +19,11 @@ public class PreprocessResult {
     public final Map<New, Integer> obj_ids;
     public final Map<Integer, Var> test_pts;
 
+
     public PreprocessResult() {
         obj_ids = new HashMap<New, Integer>();
         test_pts = new HashMap<Integer, Var>();
+        pfg = new SimpleGraph<Exp>();
     }
 
     /**
@@ -99,4 +104,5 @@ public class PreprocessResult {
             }
         }
     }
+
 }

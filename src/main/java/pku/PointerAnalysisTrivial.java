@@ -12,11 +12,15 @@ import pascal.taie.analysis.ProgramAnalysis;
 import pascal.taie.analysis.misc.IRDumper;
 import pascal.taie.config.AnalysisConfig;
 
+import pascal.taie.analysis.dataflow.fact.DataflowResult;
+import pascal.taie.ir.stmt.Stmt;
+import pascal.taie.analysis.dataflow.analysis.constprop.CPFact;
+
 
 public class PointerAnalysisTrivial extends ProgramAnalysis<PointerAnalysisResult> {
     public static final String ID = "pku-pta-trivial";
 
-    private static final Logger logger = LogManager.getLogger(IRDumper.class);
+    protected static final Logger logger = LogManager.getLogger(IRDumper.class);
 
     /**
      * Directory to dump Result.
@@ -40,6 +44,18 @@ public class PointerAnalysisTrivial extends ProgramAnalysis<PointerAnalysisResul
             jclass.getDeclaredMethods().forEach(method->{
                 if(!method.isAbstract())
                     preprocess.analysis(method.getIR());
+                
+                var const_prop_result = method.getIR().getResult("const-prop");
+                if (const_prop_result != null)
+                {
+                    logger.info(const_prop_result.getClass().getName());
+                    logger.info("Got result of const-prop for method {}", method.getName());
+                    DataflowResult<Stmt, CPFact> cpr = (DataflowResult<Stmt, CPFact>) const_prop_result;
+                }
+                else
+                {
+                    logger.info("Failed to get result of const-prop for method {}", method.getName());
+                }
             });
         });
 
