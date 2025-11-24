@@ -23,7 +23,6 @@ public class PreprocessResult {
     public PreprocessResult() {
         obj_ids = new HashMap<New, Integer>();
         test_pts = new HashMap<Integer, Var>();
-        pfg = new SimpleGraph<Exp>();
     }
 
     /**

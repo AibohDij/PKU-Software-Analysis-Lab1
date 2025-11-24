@@ -45,7 +45,7 @@ public class PointerAnalysisTrivial extends ProgramAnalysis<PointerAnalysisResul
                 if(!method.isAbstract())
                     preprocess.analysis(method.getIR());
                 
-                var const_prop_result = method.getIR().getResult("const-prop");
+                /*var const_prop_result = method.getIR().getResult("const-prop");
                 if (const_prop_result != null)
                 {
                     logger.info(const_prop_result.getClass().getName());
@@ -55,7 +55,7 @@ public class PointerAnalysisTrivial extends ProgramAnalysis<PointerAnalysisResul
                 else
                 {
                     logger.info("Failed to get result of const-prop for method {}", method.getName());
-                }
+                }*/
             });
         });
 
