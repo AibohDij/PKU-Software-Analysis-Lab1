@@ -34,6 +34,7 @@ import pascal.taie.ir.exp.Exp;
 import pascal.taie.ir.exp.Var;
 import pascal.taie.ir.exp.InstanceFieldAccess;
 import pascal.taie.ir.exp.StaticFieldAccess;
+import pascal.taie.ir.exp.ArrayAccess;
 import pascal.taie.ir.exp.LValue;
 import pascal.taie.ir.exp.RValue;
 import pascal.taie.ir.exp.FieldAccess;
@@ -42,11 +43,13 @@ import pascal.taie.ir.exp.InvokeSpecial;
 import pascal.taie.ir.exp.InvokeInterface;
 import pascal.taie.ir.exp.InvokeVirtual;
 import pascal.taie.ir.exp.InvokeStatic;
+import pascal.taie.ir.exp.CastExp;
 
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.Invoke;
 import pascal.taie.ir.stmt.New;
 import pascal.taie.ir.stmt.Copy;
+import pascal.taie.ir.stmt.Cast;
 import pascal.taie.ir.stmt.LoadField;
 import pascal.taie.ir.stmt.StoreField;
 import pascal.taie.ir.stmt.LoadArray;
@@ -97,6 +100,10 @@ class ObjField {
     public FieldRef getFieldRef() {
         return this.fieldRef;
     }
+
+    public String getName() {
+        return "o" + ((Integer) this.obj.getId()).toString() + "." + this.fieldRef.getName();
+    }
 }
 
 class StaticField {
@@ -108,6 +115,26 @@ class StaticField {
     
     public FieldRef getFieldRef() {
         return this.fieldRef;
+    }
+
+    public String getName() {
+        return this.fieldRef.getName();
+    }
+}
+
+class ObjArray {
+    private final Obj obj;
+
+    ObjArray(Obj obj) {
+        this.obj = obj;
+    }
+
+    public Obj getObj() {
+        return this.obj;
+    }
+
+    public String getName() {
+        return "o" + ((Integer) this.obj.getId()).toString() + "[*]";
     }
 }
 
@@ -126,6 +153,10 @@ class Pointer {
         this.content = staticField;
     }
 
+    Pointer(ObjArray objArray) {
+        this.content = objArray;
+    }
+
     public boolean isVar() {
         return content instanceof Var;
     }
@@ -136,6 +167,10 @@ class Pointer {
 
     public boolean isStaticField() {
         return content instanceof StaticField;
+    }
+
+    public boolean isObjArray() {
+        return content instanceof ObjArray;
     }
 
     public Var getAsVar() {
@@ -159,13 +194,22 @@ class Pointer {
         return null;
     }
 
+    public ObjArray getAsObjArray() {
+        if (content instanceof ObjArray) {
+            return ((ObjArray) content);
+        }
+        return null;
+    }
+
     public String getName() {
         if (content instanceof Var) {
             return ((Var) content).getName();
         } else if (content instanceof ObjField) {
-            return "o" + ((Integer) ((ObjField) content).getObj().getId()).toString() + "." + ((ObjField) content).getFieldRef().getName();
+            return ((ObjField) content).getName();
         } else if (content instanceof StaticField) {
-            return ((StaticField) content).getFieldRef().getName();
+            return ((StaticField) content).getName();
+        } else if (content instanceof ObjArray){
+            return ((ObjArray) content).getName();
         } else {
             return null;
         }
@@ -189,9 +233,12 @@ public class PointerAnalysis extends PointerAnalysisTrivial
     public HashMap<Obj, New> reverseMap;
     public HashMap<Obj, HashMap<FieldRef, ObjField>> objFieldManager;
     public HashMap<StaticFieldAccess, StaticField> staticFieldManager;
+    public HashMap<Obj, ObjArray> objArrayManager;
+
     public HashMap<Var, Pointer> varPointerManager;
     public HashMap<ObjField, Pointer> objFieldPointerManager;
     public HashMap<StaticField, Pointer> staticFieldPointerManager;
+    public HashMap<ObjArray, Pointer> objArrayPointerManager;
 
     public static int objCnt = 0;
     
@@ -209,9 +256,12 @@ public class PointerAnalysis extends PointerAnalysisTrivial
         reverseMap = new HashMap<>();
         objFieldManager = new HashMap<>();
         staticFieldManager = new HashMap<>();
+        objArrayManager = new HashMap<>();
+
         varPointerManager = new HashMap<>();
         objFieldPointerManager = new HashMap<>();
         staticFieldPointerManager = new HashMap<>();
+        objArrayPointerManager = new HashMap<>();
     }
 
     @Override
@@ -258,8 +308,7 @@ public class PointerAnalysis extends PointerAnalysisTrivial
                                             }
                                         }
                                     }
-                                }
-                                else if (stmt instanceof LoadField) {
+                                } else if (stmt instanceof LoadField) {
                                     // y = x.f
                                     LValue lval = ((LoadField) stmt).getLValue();
                                     FieldAccess rval = ((LoadField) stmt).getFieldAccess();
@@ -271,6 +320,26 @@ public class PointerAnalysis extends PointerAnalysisTrivial
                                                 addEdge(getPointer(objField), getPointer(((Var) lval)));
                                             }
                                         }
+                                    }
+                                } 
+                            } else if (stmt instanceof StoreArray) {
+                                // x[i] = y
+                                RValue rval = ((StoreArray) stmt).getRValue();
+                                ArrayAccess lval = ((StoreArray) stmt).getArrayAccess();
+                                if (lval.getBase() == x) {
+                                    ObjArray objArray = getObjArray(obj);
+                                    if (rval instanceof Var) {
+                                        addEdge(getPointer(((Var) rval)), getPointer(objArray));
+                                    }
+                                }
+                            } else if (stmt instanceof LoadArray) {
+                                // y = x[i]
+                                LValue lval = ((StoreArray) stmt).getLValue();
+                                ArrayAccess rval = ((StoreArray) stmt).getArrayAccess();
+                                if (rval.getBase() == x) {
+                                    ObjArray objArray = getObjArray(obj);
+                                    if (lval instanceof Var) {
+                                        addEdge(getPointer(objArray), getPointer(((Var) lval)));
                                     }
                                 }
                             }
@@ -336,6 +405,13 @@ public class PointerAnalysis extends PointerAnalysisTrivial
                         RValue rval = ((Copy) stmt).getRValue();
                         if ((lval instanceof Var) && (rval instanceof Var)) {
                             addEdge(getPointer(((Var) rval)), getPointer(((Var) lval)));
+                        }
+                    } else if (stmt instanceof Cast) {
+                        LValue lval = ((Cast) stmt).getLValue();
+                        CastExp castExp = ((Cast) stmt).getRValue();
+                        Var rval = castExp.getValue();
+                        if (lval instanceof Var) {
+                            addEdge(getPointer(rval), getPointer(((Var) lval)));
                         }
                     } else if (stmt instanceof StoreField) {
                         RValue rval = ((StoreField) stmt).getRValue();
@@ -492,6 +568,13 @@ public class PointerAnalysis extends PointerAnalysisTrivial
         return staticFieldManager.get(x);
     }
 
+    public ObjArray getObjArray(Obj obj) {
+        if (objArrayManager.get(obj) == null) {
+            objArrayManager.put(obj, new ObjArray(obj));
+        }
+        return objArrayManager.get(obj);
+    }
+
     public Pointer getPointer(Var x) {
         if (varPointerManager.get(x) == null) {
             varPointerManager.put(x, new Pointer(x));
@@ -511,5 +594,12 @@ public class PointerAnalysis extends PointerAnalysisTrivial
             staticFieldPointerManager.put(x, new Pointer(x));
         }
         return staticFieldPointerManager.get(x);
+    }
+
+    public Pointer getPointer(ObjArray x) {
+        if (objArrayPointerManager.get(x) == null) {
+            objArrayPointerManager.put(x, new Pointer(x));
+        }
+        return objArrayPointerManager.get(x);
     }
 }
