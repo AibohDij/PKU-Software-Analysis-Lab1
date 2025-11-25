@@ -7,12 +7,16 @@ import java.util.HashSet;
 import java.util.TreeSet;
 import java.util.Queue;
 import java.util.Set;
+import java.util.List;
 import java.util.LinkedList;
 
 import javax.script.SimpleBindings;
 
 import pascal.taie.language.type.Type;
+import pascal.taie.language.type.ClassType;
 import pascal.taie.language.classes.JMethod;
+import pascal.taie.language.classes.JClass;
+
 
 import pascal.taie.util.graph.Edge;
 import pascal.taie.util.graph.Graph;
@@ -32,6 +36,11 @@ import pascal.taie.ir.exp.InstanceFieldAccess;
 import pascal.taie.ir.exp.LValue;
 import pascal.taie.ir.exp.RValue;
 import pascal.taie.ir.exp.FieldAccess;
+import pascal.taie.ir.exp.InvokeInstanceExp;
+import pascal.taie.ir.exp.InvokeSpecial;
+import pascal.taie.ir.exp.InvokeInterface;
+import pascal.taie.ir.exp.InvokeVirtual;
+
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.Invoke;
 import pascal.taie.ir.stmt.New;
@@ -42,7 +51,9 @@ import pascal.taie.ir.stmt.LoadArray;
 import pascal.taie.ir.stmt.StoreArray;
 import pascal.taie.ir.stmt.AssignStmt;
 import pascal.taie.ir.stmt.FieldStmt;
+
 import pascal.taie.ir.proginfo.FieldRef;
+import pascal.taie.ir.proginfo.MethodRef;
 
 class Obj {
     private final int id;
@@ -138,7 +149,8 @@ public class PointerAnalysis extends PointerAnalysisTrivial
     public record Entry(Pointer ptr, HashSet<Obj> pts) { }
 
     public SimpleGraph<Pointer> pointerFlowGraph;
-    public SimpleGraph<JMethod> callGraph;
+    //public SimpleGraph<JMethod> callGraph;
+    public HashMap<Invoke, HashSet<JMethod>> callGraph;
     public Queue<Entry> workList;
     public HashSet<JMethod> reachableMethods;
     public HashSet<Stmt> reachableStatements;
@@ -156,7 +168,7 @@ public class PointerAnalysis extends PointerAnalysisTrivial
     public PointerAnalysis(AnalysisConfig config) {
         super(config);
         pointerFlowGraph = new SimpleGraph<>();
-        callGraph = new SimpleGraph<>();
+        callGraph = new HashMap<>();
         workList = new LinkedList<>();
         reachableMethods = new HashSet<>();
         reachableStatements = new HashSet<>();
@@ -315,12 +327,60 @@ public class PointerAnalysis extends PointerAnalysisTrivial
     }
 
     public void processCall(Var x, Obj obj) {
-        /*reachableStatements.forEach(stmt->{
+        HashSet<Invoke> iterStatements= new HashSet<>(); 
+        reachableStatements.forEach(stmt->{
             if (stmt instanceof Invoke) {
-
+                if (((Invoke) stmt).getInvokeExp() instanceof InvokeInstanceExp) {
+                    InvokeInstanceExp invokeExp = ((InvokeInstanceExp) ((Invoke) stmt).getInvokeExp());
+                    if (invokeExp.getBase() == x) {
+                        iterStatements.add(((Invoke) stmt));
+                    }
+                }
             }
-        });*/
+        });        
+        iterStatements.forEach(stmt->{
+            InvokeInstanceExp invokeExp = ((InvokeInstanceExp) stmt.getInvokeExp());
+            JMethod targetMethod = Dispatch(obj, invokeExp.getMethodRef());
+            logger.info("Target method is {}", targetMethod.getName());
+            HashSet<Obj> pts = new HashSet<>();
+            pts.add(obj);
+            workList.offer(new Entry(getPointer(targetMethod.getIR().getThis()), pts));
+
+            HashSet<JMethod> innerSet = callGraph.get(((Invoke) stmt));
+            if (innerSet == null) {
+                innerSet = new HashSet<JMethod>();
+                callGraph.put(stmt, innerSet);
+            }
+            if (!innerSet.contains(targetMethod)) {
+                innerSet.add(targetMethod);
+                addReachable(targetMethod);
+
+                List<Var> params = targetMethod.getIR().getParams();
+                List<Var> args = invokeExp.getArgs();
+                for (int i = 0; i < params.size() && i < args.size(); i++) {
+                    addEdge(getPointer(args.get(i)), getPointer(params.get(i)));
+                }
+
+                List<Var> returnVarList = targetMethod.getIR().getReturnVars();
+                if (!returnVarList.isEmpty()) {
+                    Var returnVar = returnVarList.get(0);
+                    LValue lval = stmt.getLValue();
+                    if (lval instanceof Var) {
+                        addEdge(getPointer(returnVar), getPointer(((Var) lval)));
+                    }
+                }
+            }
+        });
         return;
+    }
+
+    public JMethod Dispatch(Obj obj, MethodRef methodRef) {
+        Type objType = obj.getType();
+        if (objType instanceof ClassType) {
+            JClass jclass = World.get().getClassHierarchy().getClass(((ClassType) objType).getName());
+            return World.get().getClassHierarchy().dispatch(jclass, methodRef);
+        }
+        return null;
     }
 
     public void addEdge(Pointer start, Pointer end) {
