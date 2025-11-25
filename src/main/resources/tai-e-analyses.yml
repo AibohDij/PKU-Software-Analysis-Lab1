@@ -6,12 +6,12 @@
 - description: pku software analysis courses project pointer analysis, trivial cases
   analysisClass: pku.PointerAnalysisTrivial
   id: pku-pta-trivial
-  requires: [ pku-pta-preprocess,const-prop ]
+  requires: [ pku-pta-preprocess ]
 
 - description: pku software analysis courses project pointer analysis, your implementation
   analysisClass: pku.PointerAnalysis
   id: pku-pta
-  requires: [ pku-pta-preprocess,const-prop ]
+  requires: [ pku-pta-preprocess ]
 
 - description: whole-program pointer analysis
   analysisClass: pascal.taie.analysis.pta.PointerAnalysis
