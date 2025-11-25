@@ -33,6 +33,7 @@ import pascal.taie.ir.IR;
 import pascal.taie.ir.exp.Exp;
 import pascal.taie.ir.exp.Var;
 import pascal.taie.ir.exp.InstanceFieldAccess;
+import pascal.taie.ir.exp.StaticFieldAccess;
 import pascal.taie.ir.exp.LValue;
 import pascal.taie.ir.exp.RValue;
 import pascal.taie.ir.exp.FieldAccess;
@@ -40,6 +41,7 @@ import pascal.taie.ir.exp.InvokeInstanceExp;
 import pascal.taie.ir.exp.InvokeSpecial;
 import pascal.taie.ir.exp.InvokeInterface;
 import pascal.taie.ir.exp.InvokeVirtual;
+import pascal.taie.ir.exp.InvokeStatic;
 
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.Invoke;
@@ -97,6 +99,18 @@ class ObjField {
     }
 }
 
+class StaticField {
+    private final FieldRef fieldRef;
+
+    StaticField(FieldRef fieldRef) {
+        this.fieldRef = fieldRef;
+    }
+    
+    public FieldRef getFieldRef() {
+        return this.fieldRef;
+    }
+}
+
 class Pointer {
     private Object content;
 
@@ -108,14 +122,20 @@ class Pointer {
         this.content = objField;
     }
 
-    public boolean isVar()
-    {
+    Pointer(StaticField staticField) {
+        this.content = staticField;
+    }
+
+    public boolean isVar() {
         return content instanceof Var;
     }
 
-    public boolean isObjField()
-    {
+    public boolean isObjField() {
         return content instanceof ObjField;
+    }
+
+    public boolean isStaticField() {
+        return content instanceof StaticField;
     }
 
     public Var getAsVar() {
@@ -132,11 +152,20 @@ class Pointer {
         return null;
     }
 
+    public StaticField getAsStaticField() {
+        if (content instanceof StaticField) {
+            return ((StaticField) content);
+        }
+        return null;
+    }
+
     public String getName() {
         if (content instanceof Var) {
             return ((Var) content).getName();
         } else if (content instanceof ObjField) {
             return "o" + ((Integer) ((ObjField) content).getObj().getId()).toString() + "." + ((ObjField) content).getFieldRef().getName();
+        } else if (content instanceof StaticField) {
+            return ((StaticField) content).getFieldRef().getName();
         } else {
             return null;
         }
@@ -159,8 +188,10 @@ public class PointerAnalysis extends PointerAnalysisTrivial
     public HashMap<New, Obj> objManager;
     public HashMap<Obj, New> reverseMap;
     public HashMap<Obj, HashMap<FieldRef, ObjField>> objFieldManager;
+    public HashMap<StaticFieldAccess, StaticField> staticFieldManager;
     public HashMap<Var, Pointer> varPointerManager;
     public HashMap<ObjField, Pointer> objFieldPointerManager;
+    public HashMap<StaticField, Pointer> staticFieldPointerManager;
 
     public static int objCnt = 0;
     
@@ -177,8 +208,10 @@ public class PointerAnalysis extends PointerAnalysisTrivial
         objManager = new HashMap<>();
         reverseMap = new HashMap<>();
         objFieldManager = new HashMap<>();
+        staticFieldManager = new HashMap<>();
         varPointerManager = new HashMap<>();
         objFieldPointerManager = new HashMap<>();
+        staticFieldPointerManager = new HashMap<>();
     }
 
     @Override
@@ -195,22 +228,6 @@ public class PointerAnalysis extends PointerAnalysisTrivial
         //
         // As for when and how you enter one method,
         // it's your analysis assignment to accomplish
-        /*logger.info("The main method is {}", main.getName());
-        logger.info("JClass is {}", jclass.getName());
-        jclass.getDeclaredMethods().forEach(method->{
-            logger.info("This method is {}", method.getName());
-            if(!method.isAbstract())
-                preprocess.analysis(method.getIR());            
-        });
-        
-        //return super.analyze();
-        var objs = new TreeSet<>(preprocess.obj_ids.values());
-
-        preprocess.test_pts.forEach((test_id, pt)->{
-            result.put(test_id, objs);
-        });
-
-        dump(result);*/
     
         addReachable(main);
         while (!workList.isEmpty()) {
@@ -320,6 +337,54 @@ public class PointerAnalysis extends PointerAnalysisTrivial
                         if ((lval instanceof Var) && (rval instanceof Var)) {
                             addEdge(getPointer(((Var) rval)), getPointer(((Var) lval)));
                         }
+                    } else if (stmt instanceof StoreField) {
+                        RValue rval = ((StoreField) stmt).getRValue();
+                        FieldAccess lval = ((StoreField) stmt).getFieldAccess();
+                        if (lval instanceof StaticFieldAccess) {
+                            StaticField staticField = getStaticField(((StaticFieldAccess) lval));
+                            if (rval instanceof Var) {
+                                addEdge(getPointer(((Var) rval)), getPointer(staticField));
+                            }
+                        }
+                    } else if (stmt instanceof LoadField) {
+                        LValue lval = ((LoadField) stmt).getLValue();
+                        FieldAccess rval = ((LoadField) stmt).getFieldAccess();
+                        if (rval instanceof StaticFieldAccess) {
+                            StaticField staticField = getStaticField(((StaticFieldAccess) rval));
+                            if (lval instanceof Var) {
+                                addEdge(getPointer(staticField), getPointer(((Var) lval)));
+                            }                            
+                        }
+                    }
+                } else if(stmt instanceof Invoke) {
+                    if (((Invoke) stmt).getInvokeExp() instanceof InvokeStatic) {
+                        InvokeStatic invokeExp = (InvokeStatic) ((Invoke) stmt).getInvokeExp();
+                        JMethod targetMethod = invokeExp.getMethodRef().resolve();
+                        
+                        HashSet<JMethod> innerSet = callGraph.get(((Invoke) stmt));
+                        if (innerSet == null) {
+                            innerSet = new HashSet<JMethod>();
+                            callGraph.put(((Invoke) stmt), innerSet);
+                        }
+                        if (!innerSet.contains(targetMethod)) {
+                            innerSet.add(targetMethod);
+                            addReachable(targetMethod);
+
+                            List<Var> params = targetMethod.getIR().getParams();
+                            List<Var> args = invokeExp.getArgs();
+                            for (int i = 0; i < params.size() && i < args.size(); i++) {
+                                addEdge(getPointer(args.get(i)), getPointer(params.get(i)));
+                            }
+
+                            List<Var> returnVarList = targetMethod.getIR().getReturnVars();
+                            if (!returnVarList.isEmpty()) {
+                                Var returnVar = returnVarList.get(0);
+                                LValue lval = ((Invoke) stmt).getLValue();
+                                if (lval instanceof Var) {
+                                    addEdge(getPointer(returnVar), getPointer(((Var) lval)));
+                                }
+                            }
+                        }
                     }
                 }
             });
@@ -331,7 +396,7 @@ public class PointerAnalysis extends PointerAnalysisTrivial
         reachableStatements.forEach(stmt->{
             if (stmt instanceof Invoke) {
                 if (((Invoke) stmt).getInvokeExp() instanceof InvokeInstanceExp) {
-                    InvokeInstanceExp invokeExp = ((InvokeInstanceExp) ((Invoke) stmt).getInvokeExp());
+                    InvokeInstanceExp invokeExp = (InvokeInstanceExp) ((Invoke) stmt).getInvokeExp();
                     if (invokeExp.getBase() == x) {
                         iterStatements.add(((Invoke) stmt));
                     }
@@ -346,7 +411,7 @@ public class PointerAnalysis extends PointerAnalysisTrivial
             pts.add(obj);
             workList.offer(new Entry(getPointer(targetMethod.getIR().getThis()), pts));
 
-            HashSet<JMethod> innerSet = callGraph.get(((Invoke) stmt));
+            HashSet<JMethod> innerSet = callGraph.get(stmt);
             if (innerSet == null) {
                 innerSet = new HashSet<JMethod>();
                 callGraph.put(stmt, innerSet);
@@ -420,6 +485,13 @@ public class PointerAnalysis extends PointerAnalysisTrivial
         return objFieldManager.get(obj).get(field);
     }
 
+    public StaticField getStaticField(StaticFieldAccess x) {
+        if (staticFieldManager.get(x) == null) {
+            staticFieldManager.put(x, new StaticField(x.getFieldRef()));
+        }
+        return staticFieldManager.get(x);
+    }
+
     public Pointer getPointer(Var x) {
         if (varPointerManager.get(x) == null) {
             varPointerManager.put(x, new Pointer(x));
@@ -432,5 +504,12 @@ public class PointerAnalysis extends PointerAnalysisTrivial
             objFieldPointerManager.put(x, new Pointer(x));
         }
         return objFieldPointerManager.get(x);
+    }
+
+    public Pointer getPointer(StaticField x) {
+        if (staticFieldPointerManager.get(x) == null) {
+            staticFieldPointerManager.put(x, new Pointer(x));
+        }
+        return staticFieldPointerManager.get(x);
     }
 }
